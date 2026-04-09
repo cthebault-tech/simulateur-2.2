@@ -691,8 +691,8 @@ async function loadData(){
 
   function setStatus(text, ok=true){
     if(sourceTag) sourceTag.textContent = ok
-      ? `📊 Benchmark utilisé : base live ${tabName}`
-      : `📊 Benchmark utilisé : ratios statiques`;
+      ? `📊 Benchmark : base live (${baseData.length} projets)`
+      : `📊 Benchmark : ratios statiques de référence`;
     if(banner){
       banner.textContent = text;
       banner.style.background = ok ? '#ecfdf5' : '#fef2f2';
@@ -701,17 +701,59 @@ async function loadData(){
     }
   }
 
-  try{
+  // Méthode 1 : API Google Sheets native (export CSV public)
+  async function tryGoogleCSV(){
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}&t=${Date.now()}`;
+    const res = await fetch(url, { cache: 'no-store' });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const csv = await res.text();
+    if(!csv || csv.trim().startsWith('<')) throw new Error('Réponse HTML, sheet peut-être privé');
+    // Parse CSV simple
+    const lines = csv.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g,'').trim());
+    const rows = [];
+    for(let i=1;i<lines.length;i++){
+      const vals = lines[i].match(/(".*?"|[^,]+)(?=,|$)/g) || [];
+      const obj = {};
+      headers.forEach((h,j) => {
+        obj[h] = (vals[j]||'').replace(/^"|"$/g,'').trim();
+      });
+      rows.push(obj);
+    }
+    if(!rows.length) throw new Error('Aucune ligne parsée');
+    return rows;
+  }
+
+  // Méthode 2 : opensheet (fallback)
+  async function tryOpensheet(){
     const url = `https://opensheet.elk.sh/${sheetId}/${encodeURIComponent(tabName)}?t=${Date.now()}`;
     const res = await fetch(url, { cache: 'no-store' });
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    baseData = await res.json();
-    if(!Array.isArray(baseData) || !baseData.length) throw new Error('Aucune donnée reçue');
-    console.log("DATA LOADED", baseData.length, "rows", "TAB:", tabName);
-    setStatus(`✅ Base live connectée · Google Sheet / ${tabName} · ${baseData.length} lignes chargées`, true);
-  }catch(e){
-    console.warn("Fallback ratios statiques", e);
-    setStatus("⚠️ Erreur de connexion à la base live · utilisation des ratios statiques", false);
+    const data = await res.json();
+    if(!Array.isArray(data) || !data.length) throw new Error('Aucune donnée');
+    return data;
+  }
+
+  let loaded = false;
+
+  // Essai méthode 1
+  try{
+    baseData = await tryGoogleCSV();
+    console.log("DATA via Google CSV", baseData.length, "rows");
+    loaded = true;
+    setStatus(`✅ Connecté · Google Sheet / ${tabName} · ${baseData.length} lignes`, true);
+  }catch(e1){
+    console.warn("Google CSV échoué:", e1.message);
+    // Essai méthode 2
+    try{
+      baseData = await tryOpensheet();
+      console.log("DATA via opensheet", baseData.length, "rows");
+      loaded = true;
+      setStatus(`✅ Connecté · ${tabName} · ${baseData.length} lignes`, true);
+    }catch(e2){
+      console.warn("Opensheet échoué:", e2.message);
+      setStatus("⚠️ Connexion impossible · ratios statiques utilisés — vérifiez que le Sheet est public (Partager → Tout le monde avec le lien)", false);
+    }
   }
 
   buildBenchTable();
